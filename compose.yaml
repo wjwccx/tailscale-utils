@@ -1,0 +1,77 @@
+networks:
+  subnet:
+    name: ${NODE_SUBNET_NAME}
+    external: true
+
+services:
+  tailscale:
+    image: tailscale/tailscale:v1.84.3
+    container_name: tailscale
+    restart: unless-stopped
+    environment:
+      - TS_AUTHKEY=$TS_AUTHKEY
+      - TS_EXTRA_ARGS=--login-server=$TS_SERVER --hostname=$TS_NODE_NAME --accept-dns --accept-routes --advertise-routes=$NODE_SUBNET_RANGE  # 内网转发声明
+      - TS_USERSPACE=false
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/var/lib/tailscale
+      - /etc/localtime:/etc/localtime:ro
+    networks: ["subnet"]
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE  ###
+
+  tailscale-nat:
+    image: alpine-utils:250808
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    container_name: tailscale-nat
+    restart: unless-stopped
+    network_mode: "service:tailscale"
+    cap_add:
+      - NET_ADMIN
+    depends_on:
+      - tailscale
+    entrypoint: | 
+      sh -c "
+        iptables -t nat -A POSTROUTING -s ${NODE_SUBNET_RANGE} -o tailscale0 -j MASQUERADE && 
+        echo 'The SNAT is built up now. Sleeping ...' && 
+        sleep infinity
+      "
+
+  route-watcher:
+    image: alpine-utils:250808
+    container_name: route-watcher
+    restart: unless-stopped
+    privileged: true  # nsenter需要完全授权
+    pid: host  # 共享宿主机的pid信息到容器内，供nsenter使用
+    environment:
+      - ROUTE_SUBNETS=$TS_SUBNET_RANGE
+      - LABEL_KEY=$INJECT_LABEL_KEY
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /etc/localtime:/etc/localtime:ro
+      - ./route_watcher.sh:/watcher.sh:ro
+    network_mode: "service:tailscale"  # 共享tailscale的网络栈，ROUTE_VIA就可以是默认的本机IP
+    depends_on:
+      - tailscale-nat
+    entrypoint: "bash -u /watcher.sh"
+
+  dns-watcher:
+    image: alpine-utils:250808
+    container_name: dns-watcher
+    restart: unless-stopped
+    environment:
+      - SUBNET_NAME=$NODE_SUBNET_NAME
+      - POST_URL=$DNS_POST_URL
+      - LABEL_KEY=$DNS_LABEL_KEY
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /etc/localtime:/etc/localtime:ro
+      - ./dns_watcher.sh:/watcher.sh:ro
+    network_mode: "service:tailscale"
+    depends_on:
+      - tailscale-nat
+    entrypoint: "bash -u /watcher.sh"
+
