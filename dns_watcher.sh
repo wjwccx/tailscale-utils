@@ -12,6 +12,42 @@ get_target_label() {
   docker inspect -f '{{ index .Config.Labels "'"$LABEL_KEY"'" }}' "$1" 2>/dev/null;
 }
 
+# 重试提交POST 
+post_json_with_retry() {
+    local max_retry=10
+    local retry_delay=3
+    local attempt=1
+    local result body code
+
+    CURL_RETRY_OPTS=(
+      --connect-timeout 3  # tcp连接超时3秒
+      --max-time 10        # 整个请求过程最多10秒
+    )
+
+    while (( attempt <= max_retry )); do
+        result=$(curl -s "${CURL_RETRY_OPTS[@]}" \
+            -w $'\n%{http_code}' \
+            -X POST -H "Content-Type: application/json" \
+            -d @"$TMP_FILE" "$POST_URL?subnet=$SUBNET_NAME")
+        code="${result##*$'\n'}"
+        body="${result%$'\n'*}"
+
+        if [[ "$code" == "200" ]]; then
+            resp="$body"
+            return 0
+        fi
+
+        log "WARN POST attempt $attempt/$max_retry failed, http=$code, body=$body"
+        if (( attempt < max_retry )); then
+            sleep "$retry_delay"
+        fi
+        ((attempt++))
+    done
+
+    resp="$body"
+    return 1
+}
+
 # 生成并提交DNS
 post_records() {
   TMP_FILE="/tmp/records.json"
@@ -28,9 +64,13 @@ post_records() {
       done | jq -s '.' > "$TMP_FILE"
 
   if [[ -s "$TMP_FILE" ]] ; then
-    resp=$(curl -s -X POST -H "Content-Type: application/json" -d @"$TMP_FILE" "$POST_URL?subnet=$SUBNET_NAME")
+    resp=""
+    if post_json_with_retry; then
+        log "INFO Posted records to $POST_URL, response: $resp"
+    else
+        log "ERROR Failed to post records to $POST_URL after retries, last response: $resp"
+    fi
     LAST_POST_TIME=$(date +%s)
-    log "INFO Posted records to $POST_URL, response: ${resp}"
   else
     log "ERROR Generate records to post failed, $TMP_FILE is empty ..."
   fi
