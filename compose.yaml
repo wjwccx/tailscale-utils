@@ -59,6 +59,7 @@ services:
     entrypoint: "bash -u /watcher.sh"
 
   dns-watcher:
+    # 将子网内标有DNS_LABEL的容器 IP 上报到 DNS 服务器
     image: alpine-utils:250808
     container_name: dns-watcher
     restart: unless-stopped
@@ -66,6 +67,7 @@ services:
       - SUBNET_NAME=$NODE_SUBNET_NAME
       - POST_URL=$DNS_POST_URL
       - LABEL_KEY=$DNS_LABEL_KEY
+      - OVERRIDE_IP=$OVERRIDE_IP
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /etc/localtime:/etc/localtime:ro

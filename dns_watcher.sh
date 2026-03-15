@@ -3,6 +3,7 @@ SUBNET_NAME="${SUBNET_NAME:-}"  # 监控目标子网
 POST_URL="${POST_URL:-}"        # DNS更新Endpoint
 LABEL_KEY="${LABEL_KEY:-app.dns.name}"  # DNS注册名称
 DEBOUNCE_SECONDS="${DEBOUNCE_SECONDS:-3}" #事件缓冲默认3s，用于防抖
+OVERRIDE_IP="${OVERRIDE_IP:-}"  # 外部设置的强制上报IP
 
 log() {
   echo "$(date '+%Y-%m-%dT%H:%M:%S.%6N%:z') $*"
@@ -57,6 +58,7 @@ post_records() {
       while read -r cname cid ip; do
         if [[ -n "$ip" ]]; then
           label_value=$(get_target_label "$cid")
+          ip=${OVERRIDE_IP:-$ip}    # 如果外部设置了OVERRIDE_IP，就强制上报为OVERRIDE_IP
           for server in ${label_value//,/ }; do  # "//,/ "将变量中的逗号都替换为空格
             jq -n '{name: "'$server'", type: "A", value: "'$ip'", remark: "'$cname'"}'
           done
