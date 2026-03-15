@@ -3,9 +3,21 @@ SUBNET_NAME="${SUBNET_NAME:-}"  # 监控目标子网
 POST_URL="${POST_URL:-}"        # DNS更新Endpoint
 LABEL_KEY="${LABEL_KEY:-app.dns.name}"  # DNS注册名称
 DEBOUNCE_SECONDS="${DEBOUNCE_SECONDS:-3}" #事件缓冲默认3s，用于防抖
+OVERRIDE_IP="${OVERRIDE_IP:-}"  # 外部设置的强制上报IP
 
 log() {
-  echo "$(date '+%Y-%m-%dT%H:%M:%S.%6N%:z') $*"
+  echo "$(date '+%Y-%m-%dT%H:%M:%S.%6N%:z') $*" >&2
+}
+
+resolve_ip() {
+    local target="$1"
+    [[ -z "$target" ]] && return 
+    # hostname => IP
+    local ip
+    ip=$(getent hosts "$target" 2>/dev/null | awk '{print $1}' | head -n1)
+    [[ -z "$ip" ]] && { log "ERROR: resolve '$target' failed ..."; return 1; }
+    log "Resolve OVERRIDE_IP: $target => $ip"
+    echo "$ip"
 }
 
 get_target_label() {
@@ -52,11 +64,13 @@ post_json_with_retry() {
 post_records() {
   TMP_FILE="/tmp/records.json"
   #echo "[]" > "$TMP_FILE"
+  OVERRIDE_IP=$(resolve_ip "$OVERRIDE_IP")
   docker network inspect $SUBNET_NAME -f '{{json .Containers}}' | \
       jq -r 'to_entries[] | .value.Name + " " + .key + " " + (.value.IPv4Address | split("/")[0])' | \
       while read -r cname cid ip; do
         if [[ -n "$ip" ]]; then
           label_value=$(get_target_label "$cid")
+          ip=${OVERRIDE_IP:-$ip}    # 如果外部设置了OVERRIDE_IP，就强制上报为OVERRIDE_IP
           for server in ${label_value//,/ }; do  # "//,/ "将变量中的逗号都替换为空格
             jq -n '{name: "'$server'", type: "A", value: "'$ip'", remark: "'$cname'"}'
           done
@@ -117,7 +131,7 @@ if [[ -z $SUBNET_NAME || -z $POST_URL ]] ; then
   exit 1
 fi
 
-log "INFO Startup with: SUBNET_NAME=$SUBNET_NAME LABEL_KEY=$LABEL_KEY DEBOUNCE_SECONDS=$DEBOUNCE_SECONDS POST_URL=$POST_URL"
+log "INFO Startup with: SUBNET_NAME=$SUBNET_NAME LABEL_KEY=$LABEL_KEY DEBOUNCE_SECONDS=$DEBOUNCE_SECONDS POST_URL=$POST_URL OVERRIDE_IP=$OVERRIDE_IP"
 
 # Initial full scan
 log "INFO Initial scan for network: $SUBNET_NAME"
